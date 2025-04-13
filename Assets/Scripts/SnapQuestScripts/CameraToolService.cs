@@ -8,400 +8,355 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
+using static Code.CameraTool.NotableObjectService;
 
 namespace Code.CameraTool
 {
-    public class CameraToolService : MonoBehaviour
-    {
-        public delegate void NotableObjectAction(
-            NotableObject notableObject
-        );
+	/// <summary>
+	/// Manages the camera tool functionality, including activation, deactivation, and interactions with notable objects.
+	/// </summary>
+	public class CameraToolService : MonoBehaviour
+	{
+		#region Fields
 
-        private readonly int defaultCameraFieldOfView = 60;
-        private readonly bool isRaycastVersionInsteadOfThickBox_ = true;
-        private bool checkedIfPhotoFileEsistsAndIfNotCreateIt;
-        private RenderTexture renderTexture_;
-        private NotableObject reticleDeterminedMostNotableObject_;
-        private bool takePictureInLateUpdate_;
+		// Constants
+		private readonly int defaultCameraFieldOfView = 60;
+		private readonly bool isRaycastVersionInsteadOfThickBox_ = true;
 
-        public Transform PlayerRoot;
-        public Volume GlobalPPFXVolume;
-        public float CameraMouseSensitivity = 15;
+		// Serialized fields
+		[Header("References")]
+		[Tooltip("The root transform of the player.")]
+		[SerializeField] private Transform playerRoot;
 
-        public CameraTripod cameraTripod_;
-        public AudioSource CameraClickSFX;
+		[Tooltip("Global post-processing volume for camera effects.")]
+		[SerializeField] private Volume globalPPFXVolume;
 
-        public bool UsingCameraTool;
-        public PlayerInput PlayerInput;
-        // public InputAction PlayerInput;
-        public CameraToolUI CameraToolUI;
-        public NotableObjectService NotableObjectService;
+		[Tooltip("Mouse sensitivity for camera rotation.")]
+		[SerializeField] private float cameraMouseSensitivity = 15f;
 
-        public CinemachineVirtualCamera CameraToolVcamCamera;
-        public CinemachineVirtualCamera TPCharacterVCamera;
-        public Transform CameraToolTarget;
-        public Vector2 lookVector;
+		[Tooltip("Reference to the camera tripod.")]
+		[SerializeField] private CameraTripod cameraTripod_;
 
-        private void Start()
-        {
-            PlayerInput.actions["CameraTool"].started += ToggleCameraTool;
-            PlayerInput.actions["TakePicture"].started += TakePictureInputHandler;
-            PlayerInput.actions["Look"].performed += LookVectorListener;
-            
-            Cursor.lockState = CursorLockMode.Locked;
-        }
+		[Tooltip("Audio source for the camera click sound effect.")]
+		[SerializeField] private AudioSource cameraClickSFX;
 
-        protected void ToggleCameraTool(InputAction.CallbackContext obj)
-        {
-            if (!UsingCameraTool)
-            {
-                ActivateCameraTool();
-            }
-            else
-            {
-                DeactivateCameraTool();
-            }
-        }
-        
-        protected void LookVectorListener(InputAction.CallbackContext context)
-        {
-            if (!CameraToolUI.RootNode.activeSelf)
-                return;
-            var lookV = context.ReadValue<Vector2>() * CameraMouseSensitivity;
-            MoveReticle(lookV);
-        }
-        
-        
-        public float minX = -40f;  // minimum X rotation (upwards)
-        public float maxX = 70f; 
-        
-        private void MoveReticle(Vector2 moveDistance)
-        {
-            // Define your min and max rotation limits
-            // maximum X rotation (downwards)
-            
+		[Tooltip("Player input system for handling input actions.")]
+		[SerializeField] private PlayerInput playerInput;
 
-            // minus for invert, + for non
-            if (CameraToolVcamCamera == null)
-            {
-                return;
-            }
-            var currentX = CameraToolVcamCamera.transform.localRotation.eulerAngles.x;
-            currentX -= moveDistance.y;
+		[Tooltip("UI component for the camera tool.")]
+		[SerializeField] private CameraToolUI cameraToolUI;
 
-            // Ensure the camera's X rotation stays within the specified range
-            // The eulerAngles are in the range 0-360, so we need to adjust for negative rotations.
-            if (currentX > 180f) {
-                currentX -= 360f;
-            }
-            
-            // Normalize to -180 to 180 range
-            // Clamp the rotation between minX and maxX
-            currentX = Mathf.Clamp(currentX, minX, maxX);
+		[Tooltip("Service for managing notable objects.")]
+		[SerializeField] private NotableObjectService notableObjectService;
 
-             // Apply the rotation back to the camera, ensuring it doesn't exceed the limits
-            CameraToolVcamCamera.transform.localRotation = Quaternion.Euler(currentX, 0,0);
-            
-            PlayerRoot.Rotate(Vector3.up, moveDistance.x);
+		[Tooltip("Virtual camera for the camera tool mode.")]
+		[SerializeField] private CinemachineVirtualCamera cameraModeVCam;
 
-        }
+		[Tooltip("Virtual camera for third-person player view.")]
+		[SerializeField] private CinemachineVirtualCamera playerThirdPersonVCam;
 
-        public CameraTripod GetCameraTripod()
-        {
-            return cameraTripod_;
-        }
+		[Header("Camera Rotation Settings")]
+		[Tooltip("Minimum X rotation (upwards).")]
+		[SerializeField] private float minX = -40f;
 
-        public bool ActivateCameraTool()
-        {
-            
-            //activate the camera tool render camera
-            if (GetCameraTripod() != null && GetCameraTripod().TripodDeployed)
-            {
-                TPCharacterVCamera.Priority = 0;
-            }
-            else
-            {
-                TPCharacterVCamera.Priority = 0;
-                CameraToolVcamCamera.Priority = 10;
-            }
+		[Tooltip("Maximum X rotation (downwards).")]
+		[SerializeField] private float maxX = 70f;
 
+		[Tooltip("Third Person Offset")]
+		[SerializeField] private Vector3 cameraOffset = new Vector3(0, 1.5f, 0);
 
-            Cursor.lockState = CursorLockMode.Locked;
-            UsingCameraTool = true;
-            CameraToolUI.RequestEnableUI();
-            return true;
-        }
+		// Private fields
 
-        public bool DeactivateCameraTool()
-        {
-            if (GetCameraTripod() != null && GetCameraTripod().TripodDeployed)
-            {
-                cameraTripod_.TripodObject.VirtualCamera.enabled = false;
-            }
+		private bool usingCameraTool;
+		private bool checkedIfPhotoFileExistsAndIfNotCreateIt;
+		private RenderTexture renderTexture_;
+		private NotableObject reticleDeterminedMostNotableObject_;
+		private bool takePictureInLateUpdate_;
+		private Vector2 lookVector;
 
-            CameraToolUI.DisableUI();
-            UsingCameraTool = false;
-            
-            
-            // TPCharacterCamera.Activate();
-            // CameraToolRenderCamera.Deactivate();
-            TPCharacterVCamera.Priority = 10;
-            CameraToolVcamCamera.Priority = 0;
+		private float _cameraYaw;
+		private float _cameraPitch;
 
-            if (reticleDeterminedMostNotableObject_ != null)
-            {
-                reticleDeterminedMostNotableObject_.ExitingCameraView();
-                reticleDeterminedMostNotableObject_ = null;
-            }
+		#endregion
 
-            return true;
-        }
+		#region Properties
 
-        
-        public void TakePicture()
-        {
-            var notableObjects = DetectWhatsInScreen();
-            var mostNotable = reticleDeterminedMostNotableObject_;
+		/// <summary>
+		/// Gets a value indicating whether the camera mode is toggled.
+		/// </summary>
+		public bool IsCameraModeActive => usingCameraTool;
 
-            if (mostNotable != null)
-            {
-                var nameActionText =
-                    $"{mostNotable.DisplayName}";
-                
-                mostNotable.SendCapturedEvent();
-            }
-        }
-        public List<NotableObject> DetectWhatsInScreen()
-        {
-            var detectedNotableObjects = new List<NotableObject>();
-            var notableObjectDebug = "";
-            foreach (var notableObject in NotableObjectService.ReturnAllNotableObjectsInPictureOrNull())
-            {
-                notableObjectDebug +=
-                    $" there is a {notableObject.DisplayName} in the photo with tags {string.Join(",", notableObject.tags)}\n";
-                detectedNotableObjects.Add(notableObject);
-            }
+		#endregion
 
-            return detectedNotableObjects;
-        }
+		#region Events
 
-        public void MoveIncrementalCenterReticle(Vector2 amount)
-        {
-            throw new NotImplementedException();
-        }
+		/// <summary>
+		/// Event triggered when a notable object is in the camera's sight.
+		/// </summary>
+		public event NotableObjectInReticleAction NotableObjectInCameraSight;
 
-        public void MoveCenterReticleTo(Vector2 pos)
-        {
-            throw new NotImplementedException();
-        }
+		#endregion
 
-        public void OnDestroy()
-        {
-            if (PlayerInput == null)
-            {
-                return;
-            }
-            PlayerInput.actions["TakePicture"].started -= TakePictureInputHandler;
-            PlayerInput.actions["CameraTool"].started -= ToggleCameraTool;
-            PlayerInput.actions["Look"].performed -= LookVectorListener;
-        }
+		#region Unity Methods
 
-        public event NotableObjectAction NotableObjectInCameraSight;
+		private void Start()
+		{
+			// Bind input actions
+			playerInput.actions["CameraTool"].started += ToggleCameraTool;
+			playerInput.actions["TakePicture"].started += TakePictureInputHandler;
+			playerInput.actions["Look"].performed += LookVectorListener;
 
-        public void Update()
-        {
-            UpdateFocusObjectWhenActive();
-        }
+			Cursor.lockState = CursorLockMode.Locked;
+		}
 
-        public void UpdateFocusObjectWhenActive()
-        {
-            var closestDistance = float.MaxValue;
-            if (UsingCameraTool)
-            {
-                NotableObject mostNotableObj = null;
-                // if we are doing the raycast version
-                if (isRaycastVersionInsteadOfThickBox_)
-                {
-                    mostNotableObj = NotableObjectService.ReturnNotableObjectUsingRayCastMethod(
-                        CameraToolUI.GetReticleScreenPos()
-                    );
-                }
+		private void Update()
+		{
+			UpdateFocusObjectWhenActive();
 
-                //trigger change event
-                if (reticleDeterminedMostNotableObject_ != mostNotableObj)
-                {
-                    if (reticleDeterminedMostNotableObject_ != null)
-                    {
-                        reticleDeterminedMostNotableObject_.ExitingCameraView();
-                    }
-                }
+			// Handle rotation regardless of camera tool state
+			HandleCameraRotation();
 
-                if (mostNotableObj != null)
-                {
-                    mostNotableObj.CameraToolOnTarget();
-                }
+			// Set the local position offset
+			playerThirdPersonVCam.transform.localPosition = cameraOffset;
+			playerThirdPersonVCam.transform.parent.rotation = playerRoot.rotation;
+		}
 
-                reticleDeterminedMostNotableObject_ = mostNotableObj;
+		private void LateUpdate()
+		{
+			ThirdPersonCameraFollowTarget();
+		}
 
-                if (mostNotableObj == null)
-                {
-                    SetPrimaryNotableObject(null,
-                        false,
-                        false,
-                        false);
-                    return;
-                }
+		private void OnDestroy()
+		{
+			if (playerInput == null) return;
 
-                closestDistance = Vector3.Distance(
-                    mostNotableObj.transform.position,
-                    PlayerRoot.position
-                );
-                
-                SetPrimaryNotableObject(
-                    mostNotableObj,
-                    false,
-                    false,
-                    closestDistance > 50 *
-                    mostNotableObj.MaxDistanceDetectableZoomDistanceMultiplier
-                );
+			// Unbind input actions
+			playerInput.actions["TakePicture"].started -= TakePictureInputHandler;
+			playerInput.actions["CameraTool"].started -= ToggleCameraTool;
+			playerInput.actions["Look"].performed -= LookVectorListener;
+		}
 
-                NotableObjectInCameraSight?.Invoke(mostNotableObj);
-            }
-        }
+		#endregion
 
-        public void SetPrimaryNotableObject(
-            NotableObject notableObject,
-            bool isKnownNotableObject,
-            bool isRecordedActionState,
-            bool isTooFar)
-        {
-            if (notableObject == null)
-            {
-                CameraToolUI.PrimaryTargetDetails.text = "";
-                return;
-            }
-            CameraToolUI.PrimaryTargetDetails.text = notableObject.DisplayName;
-        }
-        
-        private IEnumerator CameraTakePictureEffect()
-        {
-            Vignette vg;
-            var ppv = GlobalPPFXVolume.profile;
-            ppv.TryGet(out vg);
+		#region Camera Tool Management
 
-            if (vg == null)
-            {
-                throw new Exception(
-                    "Must have global PPFX volume in scene with vignette (even if off) and assigned to scene master entity (check downtown for demo)"
-                );
-            }
+		/// <summary>
+		/// Toggles the camera tool on or off.
+		/// </summary>
+		/// <param name="obj">Input action callback context.</param>
+		protected void ToggleCameraTool(InputAction.CallbackContext obj)
+		{
+			if (!usingCameraTool)
+			{
+				ActivateCameraTool();
+			}
+			else
+			{
+				DeactivateCameraTool();
+			}
+		}
 
-            var startActive = vg.active;
-            var startIntensity = .3f;
-            if (!startActive)
-            {
-                startIntensity = 0;
-            }
+		/// <summary>
+		/// Activates the camera tool.
+		/// </summary>
+		public bool ActivateCameraTool()
+		{
+			if (cameraTripod_ != null && cameraTripod_.TripodDeployed)
+			{
+				playerThirdPersonVCam.Priority = 0;
+			}
+			else
+			{
+				playerThirdPersonVCam.Priority = 0;
+				cameraModeVCam.Priority = 10;
+			}
 
-            // Use the QuickVolume method to create a volume with a priority of 100, and assign the vignette to this volume
-            // Use the QuickVolume method to create a volume with a priority of 100, and assign the vignette to this volume
-            var effectDurationClose = 0.0f;
-            float shutterSpeed = .1f;
-            while (effectDurationClose < shutterSpeed)
-            {
-                effectDurationClose += Time.deltaTime;
-                var val = Mathf.Lerp(startIntensity, .55f, effectDurationClose / shutterSpeed);
-                vg.intensity.value = val;
-                yield return new WaitForEndOfFrame();
-            }
+			Cursor.lockState = CursorLockMode.Locked;
+			usingCameraTool = true;
+			cameraToolUI.RequestEnableUI();
+			return true;
+		}
 
-            effectDurationClose = 0.0f;
-            while (effectDurationClose < shutterSpeed)
-            {
-                effectDurationClose += Time.deltaTime;
-                var val = Mathf.Lerp(.55f, startIntensity, effectDurationClose / shutterSpeed);
-                vg.intensity.value = val;
-                yield return new WaitForEndOfFrame();
-            }
+		/// <summary>
+		/// Deactivates the camera tool.
+		/// </summary>
+		public bool DeactivateCameraTool()
+		{
+			if (cameraTripod_ != null && cameraTripod_.TripodDeployed)
+			{
+				cameraTripod_.TripodObject.VirtualCamera.enabled = false;
+			}
 
-            vg.intensity.value = startIntensity;
-        }
+			cameraToolUI.DisableUI();
+			usingCameraTool = false;
 
-        public NotableObject GetMostFocusedNotableObject(List<NotableObject> notableObjectsInScreenAndVisible)
-        {
-            if (notableObjectsInScreenAndVisible == null || notableObjectsInScreenAndVisible.Count == 0)
-            {
-                return null;
-            }
+			playerThirdPersonVCam.Priority = 10;
+			cameraModeVCam.Priority = 0;
 
-            NotableObject currentMostNotable = null;
-            var shortestDistanceSoFar = float.MaxValue;
-            var startPos = CameraToolTarget.position;
-            var reticleRayScreenToWorld = ReticleRayScreenToWorld();
+			if (reticleDeterminedMostNotableObject_ != null)
+			{
+				reticleDeterminedMostNotableObject_.ExitingCameraView();
+				reticleDeterminedMostNotableObject_ = null;
+			}
 
-            foreach (var notableObject in notableObjectsInScreenAndVisible)
-            {
-                var endPos = reticleRayScreenToWorld.origin + reticleRayScreenToWorld.direction *
-                    (notableObject.MaxDistanceDetectableZoomDistanceMultiplier *
-                     50);
-                var ray = new Ray(startPos, endPos);
-                var distancePointLine = Vector3.Cross(ray.direction, notableObject.GetCenterPosition() - ray.origin)
-                    .magnitude;
-                if (shortestDistanceSoFar > distancePointLine)
-                {
-                    shortestDistanceSoFar = distancePointLine;
-                    currentMostNotable = notableObject;
-                }
-            }
+			return true;
+		}
 
-            return currentMostNotable;
-        }
-        
-        public Ray ReticleRayScreenToWorld()
-        {
-            var ray = Camera.main.ScreenPointToRay(
-                new Vector3(
-                    Screen.width / 2,
-                    Screen.height / 2,
-                    0
-                )
-            );
-            Debug.DrawRay(ray.origin, ray.direction * 10, Color.cyan);
-            return ray;
-        }
+		#endregion
 
-        public void ToggleCamera()
-        {
-            if (UsingCameraTool)
-            {
-                DeactivateCameraTool();
-            }
-            else
-            {
-                ActivateCameraTool();
-            }
-        }
+		#region Camera Rotation
 
-        private void TakePictureInputHandler(InputAction.CallbackContext context)
-        {
-            if(CameraToolUI.RootNode.activeSelf)
-                TakePicture();
-        }
+		/// <summary>
+		/// Handles camera rotation based on input.
+		/// </summary>
+		private void HandleCameraRotation()
+		{
+			if (playerInput == null)
+			{
+				return;
+			}
 
-        public static float GetCameraFOVMultiplierForZoom(float zoom)
-        {
-            zoom = Math.Max(zoom, 1);
-            return (float)(1 / Math.Pow(2, zoom - 1));
-        }
+			Vector2 lookInput = playerInput.actions["Look"].ReadValue<Vector2>();
+			float deltaTimeMultiplier = Time.deltaTime;
 
-        public float GetCameraFOVForCurrentZoom()
-        {
-            return GetCameraFOVMultiplierForZoom(1);
-        }
+			// Update yaw and pitch
+			_cameraYaw += lookInput.x * deltaTimeMultiplier * cameraMouseSensitivity;
+			_cameraPitch -= lookInput.y * deltaTimeMultiplier * cameraMouseSensitivity;
 
-        public static float GetCameraFOVForZoomLevel(float zoomLevel)
-        {
-            return GetCameraFOVMultiplierForZoom(zoomLevel);
-        }
-    }
+			// Clamp pitch to prevent over-rotation
+			_cameraPitch = Mathf.Clamp(_cameraPitch, minX, maxX);
+
+			if (usingCameraTool)
+			{
+				// Apply rotation to the camera tool's virtual camera
+				cameraModeVCam.transform.localRotation = Quaternion.Euler(_cameraPitch, _cameraYaw, 0.0f);
+			}
+			else
+			{
+				// Apply rotation to the playerRoot for third-person behavior
+				playerRoot.localRotation = Quaternion.Euler(_cameraPitch, _cameraYaw, 0.0f);
+			}
+		}
+
+		private void ThirdPersonCameraFollowTarget()
+		{
+			// Smoothly interpolate the camera's parent position toward the target position
+			playerThirdPersonVCam.transform.parent.position = Vector3.Lerp(
+				playerThirdPersonVCam.transform.parent.position, // Current position
+				playerRoot.position,                                   // Target position
+				Time.deltaTime * 10f                             // Lerp speed (adjust 10f as needed)
+			);
+		}
+
+		#endregion
+
+		#region Picture Taking
+
+		/// <summary>
+		/// Handles the input for taking a picture.
+		/// </summary>
+		/// <param name="context">Input action callback context.</param>
+		private void TakePictureInputHandler(InputAction.CallbackContext context)
+		{
+			if (cameraToolUI.RootNode.activeSelf)
+				TakePicture();
+		}
+
+		/// <summary>
+		/// Takes a picture and processes notable objects in the frame.
+		/// </summary>
+		public void TakePicture()
+		{
+			var notableObjects = DetectWhatsInScreen();
+			var mostNotable = reticleDeterminedMostNotableObject_;
+
+			if (mostNotable != null)
+			{
+				var nameActionText = $"{mostNotable.DisplayName}";
+				mostNotable.SendCapturedEvent();
+			}
+		}
+
+		/// <summary>
+		/// Detects notable objects currently visible in the camera's view.
+		/// </summary>
+		/// <returns>List of notable objects detected.</returns>
+		public List<NotableObject> DetectWhatsInScreen()
+		{
+			var detectedNotableObjects = new List<NotableObject>();
+			foreach (var notableObject in notableObjectService.ReturnAllNotableObjectsInPictureOrNull())
+			{
+				detectedNotableObjects.Add(notableObject);
+			}
+
+			return detectedNotableObjects;
+		}
+
+		#endregion
+
+		#region Reticle and Camera Movement
+
+		/// <summary>
+		/// Listens for look vector input and moves the reticle accordingly.
+		/// </summary>
+		/// <param name="context">Input action callback context.</param>
+		protected void LookVectorListener(InputAction.CallbackContext context)
+		{
+			if (!cameraToolUI.RootNode.activeSelf) return;
+
+			var lookV = context.ReadValue<Vector2>() * cameraMouseSensitivity;
+			MoveReticle(lookV);
+		}
+
+		/// <summary>
+		/// Moves the reticle based on input and clamps camera rotation.
+		/// </summary>
+		/// <param name="moveDistance">Distance to move the reticle.</param>
+		private void MoveReticle(Vector2 moveDistance)
+		{
+			if (cameraModeVCam == null) return;
+
+			var currentX = cameraModeVCam.transform.localRotation.eulerAngles.x;
+			currentX -= moveDistance.y;
+
+			if (currentX > 180f) currentX -= 360f;
+			currentX = Mathf.Clamp(currentX, minX, maxX);
+
+			cameraModeVCam.transform.localRotation = Quaternion.Euler(currentX, 0, 0);
+			playerRoot.Rotate(Vector3.up, moveDistance.x);
+		}
+
+		#endregion
+
+		#region Notable Object Management
+
+		/// <summary>
+		/// Updates the most focused notable object when the camera tool is active.
+		/// </summary>
+		public void UpdateFocusObjectWhenActive()
+		{
+			if (!usingCameraTool) return;
+
+			NotableObject mostNotableObj = null;
+
+			if (isRaycastVersionInsteadOfThickBox_)
+			{
+				mostNotableObj = notableObjectService.ReturnNotableObjectUsingRayCastMethod(
+					cameraToolUI.GetReticleScreenPos()
+				);
+			}
+
+			if (reticleDeterminedMostNotableObject_ != mostNotableObj)
+			{
+				reticleDeterminedMostNotableObject_?.ExitingCameraView();
+			}
+
+			mostNotableObj?.CameraToolOnTarget();
+			reticleDeterminedMostNotableObject_ = mostNotableObj;
+
+			NotableObjectInCameraSight?.Invoke(mostNotableObj);
+		}
+
+		#endregion
+	}
 }

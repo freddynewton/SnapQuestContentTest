@@ -38,7 +38,7 @@ namespace Code.CameraTool
                 Tripod.gameObject.SetActive(false);
                 TripodDeployed = false;
             }
-            else if(cameraToolService_.UsingCameraTool)
+            else if(cameraToolService_.IsCameraModeActive)
             {
                 Tripod.gameObject.SetActive(true);
             }
@@ -51,8 +51,7 @@ namespace Code.CameraTool
             Tripod.transform.rotation = Quaternion.Euler(0, Camera.main.transform.rotation.eulerAngles.y, 0);
             TripodObject.VirtualCamera.transform.rotation = Camera.main.transform.rotation;
             TripodObject.AdjustHeightAndSetPivotAtTopOfStand();
-            TripodObject.VirtualCamera.m_Lens.FieldOfView =
-                60 * CameraToolService.GetCameraFOVForZoomLevel(1);
+            TripodObject.VirtualCamera.m_Lens.FieldOfView = 60;
 
             Tripod.SetActive(true);
             // camera can pivot, but not move around (up and down / left and right can move up and down a certain distance for ease of use?)
