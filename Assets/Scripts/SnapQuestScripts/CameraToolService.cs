@@ -55,6 +55,9 @@ namespace Code.CameraTool
 		[Tooltip("Virtual camera for third-person player view.")]
 		[SerializeField] private CinemachineVirtualCamera playerThirdPersonVCam;
 
+		[Tooltip("Reference to the Cinemachine Brain component.")]
+		[SerializeField] private CinemachineBrain cinemachineBrain;
+
 		[Header("Camera Rotation Settings")]
 		[Tooltip("Minimum X rotation (upwards).")]
 		[SerializeField] private float minX = -40f;
@@ -94,10 +97,6 @@ namespace Code.CameraTool
 		/// Event triggered when a notable object is in the camera's sight.
 		/// </summary>
 		public event NotableObjectInReticleAction NotableObjectInCameraSight;
-
-		#endregion
-
-		#region Unity Methods
 
 		private void Start()
 		{
@@ -211,7 +210,7 @@ namespace Code.CameraTool
 		/// </summary>
 		private void HandleCameraRotation()
 		{
-			if (playerInput == null)
+			if (playerInput == null || cinemachineBrain.IsBlending)
 			{
 				return;
 			}
@@ -296,13 +295,18 @@ namespace Code.CameraTool
 
 		#region Reticle and Camera Movement
 
-		/// <summary>
-		/// Listens for look vector input and moves the reticle accordingly.
-		/// </summary>
-		/// <param name="context">Input action callback context.</param>
 		protected void LookVectorListener(InputAction.CallbackContext context)
 		{
-			if (!cameraToolUI.RootNode.activeSelf) return;
+			// Skip processing if the camera is blending
+			if (cinemachineBrain != null && cinemachineBrain.IsBlending)
+			{
+				return;
+			}
+
+			if (!cameraToolUI.RootNode.activeSelf)
+			{
+				return;
+			}
 
 			var lookV = context.ReadValue<Vector2>() * cameraMouseSensitivity;
 			MoveReticle(lookV);
